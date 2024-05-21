@@ -10,7 +10,6 @@ colors = {
   gray = "\27[90m"
 }
 
-
 -- Checks if two points are within a given range.
 -- @param x1, y1: Coordinates of the first point.
 -- @param x2, y2: Coordinates of the second point.
@@ -18,6 +17,14 @@ colors = {
 -- @return: Boolean indicating if the points are within the specified range.
 function inRange(x1, y1, x2, y2, range)
     return math.abs(x1 - x2) <= range and math.abs(y1 - y2) <= range
+end
+
+-- Calculate the distance between two points.
+-- @param x1, y1: Coordinates of the first point.
+-- @param x2, y2: Coordinates of the second point.
+-- @return: The Euclidean distance between the points.
+function calculateDistance(x1, y1, x2, y2)
+    return math.sqrt((x1 - x2)^2 + (y1 - y2)^2)
 end
 
 -- Decide the next action based on player proximity, energy, health, and game map analysis.
@@ -31,27 +38,60 @@ function decideNextAction()
   for target, state in pairs(LatestGameState.Players) do
     if target ~= ao.id and inRange(player.x, player.y, state.x, state.y, 1) then
       targetInRange = true
-      if not bestTarget or state.health < bestTarget.health or (state.health == bestTarget.health and inRange(player.x, player.y, state.x, state.y, 1) < inRange(player.x, player.y, bestTarget.x, bestTarget.y, 1)) then
+      if not bestTarget or state.health < bestTarget.health or (state.health == bestTarget.health and calculateDistance(player.x, player.y, state.x, state.y) < calculateDistance(player.x, player.y, bestTarget.x, bestTarget.y)) then
         bestTarget = state
       end
     end
   end
 
-  if player.energy > 5 and targetInRange then
+  -- Attack logic if energy is sufficient and a target is in range
+  if player.energy > 10 and targetInRange then
     print(colors.red .. "Player in range. Attacking." .. colors.reset)
-    ao.send({  -- Attack the closest player with all your energy.
+    ao.send({  -- Attack the closest player with half of your energy.
       Target = Game,
       Action = "PlayerAttack",
       Player = ao.id,
-      AttackEnergy = tostring(player.energy),
+      AttackEnergy = tostring(math.floor(player.energy / 2)),
     })
-    print(colors.red .. "No player in range or low energy. Moving randomly." .. colors.reset)
- 
-    -- map analysis, using only 4 directions
-	local directionRandom = {"Up", "Down", "Left", "Right"}
-    local randomIndex = math.random(#directionRandom)
-    ao.send({Target = Game, Action = "PlayerMove", Player = ao.id, Direction = directionRandom[randomIndex]})
+  else
+    -- Move towards the center of the arena or towards clusters of players
+    local centerX, centerY = LatestGameState.MapWidth / 2, LatestGameState.MapHeight / 2
+    local moveDirection = ""
+
+    if calculateDistance(player.x, player.y, centerX, centerY) > 1 then
+      if player.x < centerX then moveDirection = "Right"
+      elseif player.x > centerX then moveDirection = "Left"
+      elseif player.y < centerY then moveDirection = "Up"
+      elseif player.y > centerY then moveDirection = "Down"
+      end
+    else
+      -- If already near the center, move towards the nearest cluster of players
+      local nearestPlayer = nil
+      for target, state in pairs(LatestGameState.Players) do
+        if target ~= ao.id then
+          if not nearestPlayer or calculateDistance(player.x, player.y, state.x, state.y) < calculateDistance(player.x, player.y, nearestPlayer.x, nearestPlayer.y) then
+            nearestPlayer = state
+          end
+        end
+      end
+
+      if nearestPlayer then
+        if player.x < nearestPlayer.x then moveDirection = "Right"
+        elseif player.x > nearestPlayer.x then moveDirection = "Left"
+        elseif player.y < nearestPlayer.y then moveDirection = "Up"
+        elseif player.y > nearestPlayer.y then moveDirection = "Down"
+        end
+      else
+        -- If no other players are found, move randomly
+        local directions = {"Up", "Down", "Left", "Right"}
+        moveDirection = directions[math.random(#directions)]
+      end
+    end
+
+    print(colors.blue .. "Moving " .. moveDirection .. "." .. colors.reset)
+    ao.send({Target = Game, Action = "PlayerMove", Player = ao.id, Direction = moveDirection})
   end
+
   InAction = false -- Reset the "InAction" flag
 end
 
@@ -105,7 +145,7 @@ Handlers.add(
     local json = require("json")
     LatestGameState = json.decode(msg.Data)
     ao.send({Target = ao.id, Action = "UpdatedGameState"})
-    print("Game state updated. Print \'LatestGameState\' for detailed view.")
+    print("Game state updated. Print 'LatestGameState' for detailed view.")
   end
 )
 
@@ -132,7 +172,7 @@ Handlers.add(
     if not InAction then -- InAction logic added
       InAction = true -- InAction logic added
       local playerEnergy = LatestGameState.Players[ao.id].energy
-      if playerEnergy == undefined then
+      if playerEnergy == nil then
         print(colors.red .. "Unable to read energy." .. colors.reset)
         ao.send({Target = Game, Action = "Attack-Failed", Reason = "Unable to read energy."})
       elseif playerEnergy == 0 then
@@ -140,7 +180,7 @@ Handlers.add(
         ao.send({Target = Game, Action = "Attack-Failed", Reason = "Player has no energy."})
       else
         print(colors.red .. "Returning attack." .. colors.reset)
-        ao.send({Target = Game, Action = "PlayerAttack", Player = ao.id, AttackEnergy = tostring(playerEnergy)})
+        ao.send({Target = Game, Action = "PlayerAttack", Player = ao.id, AttackEnergy = tostring(math.floor(playerEnergy / 2))})
       end
       InAction = false -- InAction logic added
       ao.send({Target = ao.id, Action = "Tick"})
